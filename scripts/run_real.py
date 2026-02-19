@@ -6,62 +6,79 @@ then runs the capacity detector on the subset.
 
 Usage:
     uv run python scripts/run_real.py
+    uv run python scripts/run_real.py --data data/slices/home-health.parquet
+    uv run python scripts/run_real.py --codes home-health
+    uv run python scripts/run_real.py --top 50 --export flagged.csv
 """
 
+import argparse
 import sys
 from pathlib import Path
-import polars as pl
 
 sys.path.insert(0, str(Path(__file__).parent))
+from code_lists import resolve_codes, PRESETS
 from simulate_capacity import run_capacity_analysis, print_report
+import polars as pl
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 FULL_FILE = DATA_DIR / "medicaid-provider-spending.parquet"
 SUBSET_FILE = DATA_DIR / "subset_high_value.parquet"
 
-# Codes worth investigating: E&M, personal care, adult day care, home health
-TARGET_CODES = [
-    # E&M office visits (most common billing codes — capacity violations here are damning)
-    "99211", "99212", "99213", "99214", "99215",
-    # New patient
-    "99202", "99203", "99204", "99205",
-    # Personal care / home care (family fraud vector)
-    "T1019", "T1020", "T1021",
-    "S5125", "S5130", "S5170",
-    # Adult day care (flash clinic pipeline)
-    "T2021", "T2020", "S5100", "S5101", "S5102",
-    # Screening / preventive (cramming signal)
-    "99381", "99385", "99391", "99395", "99397",
-]
-
 
 def main():
-    if not FULL_FILE.exists():
-        print(f"ERROR: {FULL_FILE} not found")
-        return
+    parser = argparse.ArgumentParser(description="Run fraud detection on CMS data")
+    parser.add_argument("--data", type=str, default=None,
+                        help="Path to pre-sliced parquet file (skips filtering)")
+    parser.add_argument("--codes", type=str, default=None,
+                        help="HCPCS preset or comma-separated codes (default: high-value)")
+    parser.add_argument("--top", type=int, default=40,
+                        help="Number of top entities to show (default: 40)")
+    parser.add_argument("--export", type=str, default=None,
+                        help="Export flagged results to CSV")
+    parser.add_argument("--threshold", type=float, default=20.0,
+                        help="Suspicion score threshold for export (default: 20)")
+    args = parser.parse_args()
 
-    # Step 1: filter to target codes
-    if SUBSET_FILE.exists():
-        print(f"Using cached subset: {SUBSET_FILE}")
-        lf = pl.scan_parquet(SUBSET_FILE)
+    if args.data:
+        # Use pre-sliced data directly
+        data_path = Path(args.data)
+        if not data_path.exists():
+            print(f"ERROR: {data_path} not found")
+            return
+        print(f"Using pre-sliced data: {data_path}")
+        lf = pl.scan_parquet(data_path)
     else:
-        print(f"Filtering {FULL_FILE.name} to {len(TARGET_CODES)} HCPCS codes...")
-        lf = pl.scan_parquet(FULL_FILE)
-        df = lf.filter(pl.col("HCPCS_CODE").is_in(TARGET_CODES)).collect(streaming=True)
-        print(f"Got {len(df):,} rows, {df['BILLING_PROVIDER_NPI_NUM'].n_unique():,} billing NPIs")
-        df.write_parquet(SUBSET_FILE)
-        print(f"Saved to {SUBSET_FILE}")
-        lf = pl.scan_parquet(SUBSET_FILE)
+        # Filter from full dataset or use cached subset
+        target_codes = resolve_codes(args.codes or "high-value")
 
-    # Step 2: run detector
+        if args.codes is None and SUBSET_FILE.exists():
+            print(f"Using cached subset: {SUBSET_FILE}")
+            lf = pl.scan_parquet(SUBSET_FILE)
+        elif FULL_FILE.exists():
+            print(f"Filtering {FULL_FILE.name} to {len(target_codes)} HCPCS codes...")
+            lf = pl.scan_parquet(FULL_FILE)
+            df = lf.filter(pl.col("HCPCS_CODE").is_in(target_codes)).collect(streaming=True)
+            print(f"Got {len(df):,} rows, {df['BILLING_PROVIDER_NPI_NUM'].n_unique():,} billing NPIs")
+
+            # Cache if using default high-value codes
+            if args.codes is None:
+                df.write_parquet(SUBSET_FILE)
+                print(f"Saved to {SUBSET_FILE}")
+
+            lf = df.lazy()
+        else:
+            print(f"ERROR: {FULL_FILE} not found")
+            return
+
+    # Run detector
     summary = run_capacity_analysis(lf)
-    print_report(summary, top_n=40)
+    print_report(summary, top_n=args.top)
 
-    # Step 3: export
-    flagged = summary.filter(pl.col("suspicion_score") > 20)
-    out = DATA_DIR / "suspects_real.csv"
-    flagged.write_csv(out)
-    print(f"\nExported {len(flagged)} flagged providers to {out}")
+    # Export
+    export_path = args.export or str(DATA_DIR / "suspects_real.csv")
+    flagged = summary.filter(pl.col("suspicion_score") > args.threshold)
+    flagged.write_csv(export_path)
+    print(f"\nExported {len(flagged)} flagged providers to {export_path}")
 
 
 if __name__ == "__main__":

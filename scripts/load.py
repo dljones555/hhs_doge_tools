@@ -66,6 +66,27 @@ def filter_date_range(lf: pl.LazyFrame, start: str, end: str) -> pl.LazyFrame:
     )
 
 
+def filter_npis_from_file(lf: pl.LazyFrame, path: str | Path) -> pl.LazyFrame:
+    """Filter to NPIs listed in a text file (one per line)."""
+    p = Path(path)
+    npis = [line.strip() for line in p.read_text().splitlines() if line.strip()]
+    return filter_npis(lf, npis)
+
+
+def filter_state(lf: pl.LazyFrame, state: str, npi_state_map: dict[str, str]) -> pl.LazyFrame:
+    """Filter to rows where the billing or servicing NPI is in a given state.
+
+    The CMS dataset has no state column, so this requires an external mapping
+    of NPI -> state (e.g. from NPPES lookups). Pass npi_state_map as
+    {npi_string: two_letter_state}.
+    """
+    state = state.upper()
+    npis_in_state = [npi for npi, st in npi_state_map.items() if st.upper() == state]
+    if not npis_in_state:
+        print(f"WARNING: No NPIs found for state {state} in the provided map")
+    return filter_npis(lf, npis_in_state)
+
+
 def collect_and_save(lf: pl.LazyFrame, name: str) -> pl.DataFrame:
     """Collect a LazyFrame and save to data/ as parquet."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)

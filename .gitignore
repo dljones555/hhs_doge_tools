@@ -11,3 +11,4 @@ wheels/
 
 # Local data cache
 data/
+.claude/settings.local.json
