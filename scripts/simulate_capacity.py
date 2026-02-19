@@ -1,13 +1,14 @@
 """
 simulate_capacity.py — Flag providers billing more than is physically possible.
 
-For each provider+month, sums up implied work hours across all their HCPCS codes
-using CMS time estimates. Flags anyone exceeding human capacity.
+For each SERVICING provider+month, sums up implied work hours across all their
+HCPCS codes using CMS time estimates. Flags anyone exceeding human capacity.
+When SERVICING_PROVIDER_NPI_NUM is null, falls back to BILLING_PROVIDER_NPI_NUM.
 
 Also detects:
   - Cookie-cutter billing (low code diversity vs high patient volume)
   - Family/personal care patterns (very few beneficiaries, daily billing)
-  - Billing vs servicing splits (TPA patterns)
+  - Billing vs servicing splits (TPA patterns — flagged at billing NPI level)
 
 Usage:
     uv run python scripts/simulate_capacity.py                          # uses test data
@@ -85,8 +86,9 @@ def estimate_minutes(code: str) -> float:
 
 def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
     """
-    For each billing NPI + month, compute total implied work minutes.
-    Returns a scored DataFrame sorted by impossibility.
+    For each servicing (worker) NPI + month, compute total implied work minutes.
+    TPA detection runs separately at the billing NPI level.
+    Returns a scored DataFrame sorted by suspicion score.
     """
     # Build a time-lookup DataFrame for joining (stays lazy-compatible)
     codes_df = lf.select("HCPCS_CODE").unique().collect()
@@ -97,7 +99,7 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
         "est_minutes_per_claim": [float(v) for v in time_map.values()],
     }).lazy()
 
-    # Join time estimates and compute total_minutes — all lazy, no collect
+    # Join time estimates and resolve worker NPI: servicing if present, else billing
     enriched = (
         lf.select([
             "BILLING_PROVIDER_NPI_NUM",
@@ -111,22 +113,22 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
         .join(time_df, on="HCPCS_CODE", how="left")
         .with_columns(
             pl.col("est_minutes_per_claim").fill_null(15.0),
+            pl.coalesce(["SERVICING_PROVIDER_NPI_NUM", "BILLING_PROVIDER_NPI_NUM"]).alias("WORKER_NPI"),
         )
         .with_columns(
             (pl.col("TOTAL_CLAIMS") * pl.col("est_minutes_per_claim")).alias("total_minutes")
         )
     )
 
-    # ── Per-NPI per-month capacity analysis (lazy groupby) ──
-    # Note: TOTAL_UNIQUE_BENEFICIARIES can overlap across codes, so use max not sum
-    monthly = enriched.group_by(["BILLING_PROVIDER_NPI_NUM", "CLAIM_FROM_MONTH"]).agg([
+    # ── Per-WORKER per-month capacity analysis (lazy groupby) ──
+    # This is the core change: capacity is measured on who does the work
+    monthly = enriched.group_by(["WORKER_NPI", "CLAIM_FROM_MONTH"]).agg([
         pl.col("total_minutes").sum().alias("month_total_minutes"),
         pl.col("TOTAL_CLAIMS").sum().alias("month_total_claims"),
         pl.col("TOTAL_UNIQUE_BENEFICIARIES").max().alias("month_max_benes"),
-        pl.col("TOTAL_UNIQUE_BENEFICIARIES").sum().alias("month_sum_benes"),
         pl.col("TOTAL_PAID").sum().alias("month_total_paid"),
         pl.col("HCPCS_CODE").n_unique().alias("month_distinct_codes"),
-        pl.col("SERVICING_PROVIDER_NPI_NUM").n_unique().alias("distinct_servicing_npis"),
+        pl.col("BILLING_PROVIDER_NPI_NUM").n_unique().alias("distinct_billing_npis"),
     ])
 
     monthly = monthly.with_columns([
@@ -134,14 +136,28 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
         (pl.col("month_total_minutes") / WORK_DAYS_PER_MONTH / 60).alias("implied_hours_per_day"),
     ])
 
-    # ── Per-NPI summary (across all months) — collect here ──
+    # ── TPA detection: separate pass at billing NPI level ──
+    tpa_monthly = enriched.group_by(["BILLING_PROVIDER_NPI_NUM", "CLAIM_FROM_MONTH"]).agg([
+        pl.col("SERVICING_PROVIDER_NPI_NUM").n_unique().alias("distinct_servicing_npis"),
+    ])
+    tpa_summary = tpa_monthly.group_by("BILLING_PROVIDER_NPI_NUM").agg([
+        pl.col("distinct_servicing_npis").max().alias("max_servicing_npis"),
+    ])
+
+    # ── Collect ──
     print("Running aggregation (this may take a few minutes on large datasets)...")
     try:
         monthly = monthly.collect(engine="streaming")
     except Exception:
         monthly = monthly.collect(streaming=True)
 
-    summary = monthly.group_by("BILLING_PROVIDER_NPI_NUM").agg([
+    try:
+        tpa_summary = tpa_summary.collect(engine="streaming")
+    except Exception:
+        tpa_summary = tpa_summary.collect(streaming=True)
+
+    # ── Per-worker summary (across all months) ──
+    summary = monthly.group_by("WORKER_NPI").agg([
         pl.col("capacity_ratio").max().alias("peak_capacity_ratio"),
         pl.col("capacity_ratio").mean().alias("avg_capacity_ratio"),
         pl.col("implied_hours_per_day").max().alias("peak_hours_per_day"),
@@ -151,8 +167,15 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
         pl.col("month_distinct_codes").max().alias("max_distinct_codes"),
         pl.col("month_distinct_codes").mean().alias("avg_distinct_codes"),
         pl.col("CLAIM_FROM_MONTH").n_unique().alias("active_months"),
-        pl.col("distinct_servicing_npis").max().alias("max_servicing_npis"),
+        pl.col("distinct_billing_npis").max().alias("max_billing_npis"),
     ])
+
+    # Join TPA info: a worker NPI may also be a billing NPI
+    summary = summary.join(
+        tpa_summary, left_on="WORKER_NPI", right_on="BILLING_PROVIDER_NPI_NUM", how="left"
+    ).with_columns(
+        pl.col("max_servicing_npis").fill_null(0),
+    )
 
     # ── Flag types ──
     summary = summary.with_columns([
@@ -172,7 +195,7 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
             & (pl.col("active_months") >= 12)
         ).alias("flag_family_care"),
 
-        # TPA pattern: billing NPI has multiple servicing NPIs
+        # TPA pattern: this NPI bills for 4+ servicing NPIs (only set if it's a billing NPI)
         (pl.col("max_servicing_npis") > 3).alias("flag_tpa_pattern"),
     ])
 
@@ -213,7 +236,7 @@ def print_report(summary: pl.DataFrame, top_n: int = 25):
 
     print(f"\n  TOP {min(top_n, len(flagged))} SUSPECTS:")
     print("-" * 90)
-    print(f"  {'NPI':<14} {'Score':>6} {'Peak hrs/day':>13} {'Peak benes':>11} "
+    print(f"  {'WORKER NPI':<14} {'Score':>6} {'Peak hrs/day':>13} {'Peak benes':>11} "
           f"{'Codes':>6} {'Months':>7} {'Total Paid':>12}  Flags")
     print("-" * 90)
 
@@ -225,7 +248,7 @@ def print_report(summary: pl.DataFrame, top_n: int = 25):
         if row["flag_tpa_pattern"]: flags.append("TPA")
         if not flags and row["flag_high_capacity"]: flags.append("HIGH-CAP")
 
-        print(f"  {row['BILLING_PROVIDER_NPI_NUM']:<14} "
+        print(f"  {row['WORKER_NPI']:<14} "
               f"{row['suspicion_score']:>6.1f} "
               f"{row['peak_hours_per_day']:>13.1f} "
               f"{row['peak_benes_per_month']:>11} "

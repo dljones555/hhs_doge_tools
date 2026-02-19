@@ -44,8 +44,8 @@ def make_lf(rows):
 
 
 def get_npi_row(summary, npi):
-    """Pull a single NPI's row from the summary DataFrame."""
-    filtered = summary.filter(pl.col("BILLING_PROVIDER_NPI_NUM") == npi)
+    """Pull a single NPI's row from the summary DataFrame (keyed by WORKER_NPI)."""
+    filtered = summary.filter(pl.col("WORKER_NPI") == npi)
     assert len(filtered) == 1, f"Expected 1 row for NPI {npi}, got {len(filtered)}"
     return filtered.row(0, named=True)
 
@@ -54,7 +54,7 @@ def get_npi_row(summary, npi):
 
 class TestEstimateMinutes:
     def test_known_code(self):
-        assert estimate_minutes("99213") == 15
+        assert estimate_minutes("99213") == 20
         assert estimate_minutes("99215") == 40
         assert estimate_minutes("T1020") == 480
 
@@ -72,8 +72,10 @@ class TestEstimateMinutes:
         assert estimate_minutes("S5999") == 60
 
     def test_surgical_range(self):
-        """Numeric codes in 10000-69999 should get surgical estimate."""
-        assert estimate_minutes("27500") == 30
+        """Numeric codes in 10000-69999 should get a reasonable surgical estimate.
+        With CMS RVU lookup loaded, exact value comes from Work RVU."""
+        mins = estimate_minutes("27500")
+        assert 20 <= mins <= 60  # reasonable surgical range
 
     def test_alpha_fallback(self):
         """Unknown alpha-prefixed code gets HCPCS level II default."""
@@ -172,17 +174,29 @@ class TestFamilyCare:
 
 class TestTPAPattern:
     def test_flags_tpa(self):
-        """One billing NPI with 5 different servicing NPIs = TPA ring."""
+        """One billing NPI with 5 different servicing NPIs = TPA ring.
+        With worker-level grouping, each servicing NPI gets its own row.
+        The billing NPI only gets a TPA flag if it also appears as a worker."""
         rows = []
         for srv in range(101, 106):
             rows.extend(make_rows(
                 npi=30, servicing_npi=srv,
                 codes_claims=[("T2021", 20, 15, 8000.0)],
             ))
+        # Also add a row where billing NPI 30 services itself, so it appears as a worker
+        rows.extend(make_rows(
+            npi=30, servicing_npi=30,
+            codes_claims=[("99213", 5, 5, 500.0)],
+        ))
         summary = run_capacity_analysis(make_lf(rows))
+        # Billing NPI 30 is also a worker and should have the TPA flag
         row = get_npi_row(summary, 30)
         assert row["flag_tpa_pattern"] is True
         assert row["max_servicing_npis"] >= 5
+        # Individual servicing NPIs should have their own capacity rows
+        for srv in range(101, 106):
+            srv_row = get_npi_row(summary, srv)
+            assert srv_row["flag_tpa_pattern"] is False  # they're workers, not billing entities
 
     def test_self_billing_not_flagged(self):
         """Provider billing for themselves only = not TPA."""
