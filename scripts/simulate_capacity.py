@@ -17,37 +17,35 @@ Usage:
 """
 
 import argparse
+import json
 from pathlib import Path
 import polars as pl
 
-# ── Time estimates per HCPCS code (minutes of provider face-time) ──
-# Source: CMS Physician Fee Schedule RVU files + clinical consensus
-# Codes not in this dict get estimated by prefix/range heuristics
-HCPCS_MINUTES = {
-    # E&M Office visits
-    "99211": 5, "99212": 10, "99213": 15, "99214": 25, "99215": 40,
-    # New patient
-    "99201": 10, "99202": 20, "99203": 30, "99204": 45, "99205": 60,
-    # Preventive established
-    "99391": 25, "99392": 30, "99393": 30, "99394": 30, "99395": 35, "99396": 35, "99397": 35,
-    # Preventive new
-    "99381": 30, "99382": 35, "99383": 35, "99384": 35, "99385": 40, "99386": 45, "99387": 45,
-    # Hospital visits
-    "99221": 30, "99222": 50, "99223": 70,
-    "99231": 15, "99232": 25, "99233": 35,
-    # ER
-    "99281": 10, "99282": 15, "99283": 25, "99284": 40, "99285": 60,
-    # Personal care / home care (per day or per 15-min unit)
-    "T1019": 60, "T1020": 480,  # per diem = full day
-    "S5125": 15, "S5130": 60, "S5170": 30,
-    # Adult day care
-    "T2021": 480, "T2020": 480,  # full day programs
-    "S5100": 480, "S5101": 240, "S5102": 240,
-    # Screening / intake
-    "99381": 30, "99385": 40, "99391": 25, "99395": 35, "99397": 35,
-    # Common surgical (face time including pre/post)
-    "27447": 180, "27130": 180, "29881": 60, "43239": 45, "47562": 90,
-}
+# ── Time lookup: loaded from CMS-sourced JSON, with fallback heuristics ──
+# Built by build_time_lookup.py from:
+#   - CMS PFS RVU25C (Jul 2025) — Work RVUs + description-extracted times
+#   - CMS CY2025 PFS Final Rule — E&M visit times
+#   - HCPCS Level II code descriptions — T/S code billing units
+# Run `uv run python scripts/build_time_lookup.py` to regenerate.
+REF_DIR = Path(__file__).resolve().parent.parent / "data" / "reference"
+_LOOKUP_PATH = REF_DIR / "hcpcs_minutes.json"
+HCPCS_MINUTES: dict[str, float] = {}
+
+if _LOOKUP_PATH.exists():
+    with open(_LOOKUP_PATH) as _f:
+        _raw = json.load(_f)
+        HCPCS_MINUTES = {k: v["minutes"] if isinstance(v, dict) else v for k, v in _raw.items()}
+    print(f"Loaded {len(HCPCS_MINUTES)} HCPCS time estimates from {_LOOKUP_PATH.name}")
+else:
+    print(f"WARNING: {_LOOKUP_PATH} not found. Run build_time_lookup.py first.")
+    print("Falling back to built-in estimates for common codes only.")
+    HCPCS_MINUTES = {
+        "99211": 5, "99212": 10, "99213": 20, "99214": 30, "99215": 40,
+        "99202": 15, "99203": 30, "99204": 45, "99205": 60,
+        "T1019": 15, "T1020": 480, "T2021": 480, "T2020": 480,
+        "S5125": 15, "S5130": 60, "S5170": 30,
+        "S5100": 480, "S5101": 240, "S5102": 60,
+    }
 
 # Working assumptions
 WORK_DAYS_PER_MONTH = 22
@@ -90,36 +88,38 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
     For each billing NPI + month, compute total implied work minutes.
     Returns a scored DataFrame sorted by impossibility.
     """
-    # Get all unique HCPCS codes to build the time lookup
+    # Build a time-lookup DataFrame for joining (stays lazy-compatible)
     codes_df = lf.select("HCPCS_CODE").unique().collect()
     code_list = codes_df["HCPCS_CODE"].to_list()
     time_map = {c: estimate_minutes(str(c)) for c in code_list}
+    time_df = pl.DataFrame({
+        "HCPCS_CODE": list(time_map.keys()),
+        "est_minutes_per_claim": [float(v) for v in time_map.values()],
+    }).lazy()
 
-    # Collect the data we need
-    df = lf.select([
-        "BILLING_PROVIDER_NPI_NUM",
-        "SERVICING_PROVIDER_NPI_NUM",
-        "HCPCS_CODE",
-        "CLAIM_FROM_MONTH",
-        "TOTAL_UNIQUE_BENEFICIARIES",
-        "TOTAL_CLAIMS",
-        "TOTAL_PAID",
-    ]).collect()
-
-    # Add estimated minutes per row
-    df = df.with_columns(
-        pl.col("HCPCS_CODE").cast(pl.Utf8).replace_strict(
-            {str(k): v for k, v in time_map.items()}, default=15.0
-        ).alias("est_minutes_per_claim")
+    # Join time estimates and compute total_minutes — all lazy, no collect
+    enriched = (
+        lf.select([
+            "BILLING_PROVIDER_NPI_NUM",
+            "SERVICING_PROVIDER_NPI_NUM",
+            "HCPCS_CODE",
+            "CLAIM_FROM_MONTH",
+            "TOTAL_UNIQUE_BENEFICIARIES",
+            "TOTAL_CLAIMS",
+            "TOTAL_PAID",
+        ])
+        .join(time_df, on="HCPCS_CODE", how="left")
+        .with_columns(
+            pl.col("est_minutes_per_claim").fill_null(15.0),
+        )
+        .with_columns(
+            (pl.col("TOTAL_CLAIMS") * pl.col("est_minutes_per_claim")).alias("total_minutes")
+        )
     )
 
-    df = df.with_columns(
-        (pl.col("TOTAL_CLAIMS") * pl.col("est_minutes_per_claim")).alias("total_minutes")
-    )
-
-    # ── Per-NPI per-month capacity analysis ──
+    # ── Per-NPI per-month capacity analysis (lazy groupby) ──
     # Note: TOTAL_UNIQUE_BENEFICIARIES can overlap across codes, so use max not sum
-    monthly = df.group_by(["BILLING_PROVIDER_NPI_NUM", "CLAIM_FROM_MONTH"]).agg([
+    monthly = enriched.group_by(["BILLING_PROVIDER_NPI_NUM", "CLAIM_FROM_MONTH"]).agg([
         pl.col("total_minutes").sum().alias("month_total_minutes"),
         pl.col("TOTAL_CLAIMS").sum().alias("month_total_claims"),
         pl.col("TOTAL_UNIQUE_BENEFICIARIES").max().alias("month_max_benes"),
@@ -134,7 +134,13 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
         (pl.col("month_total_minutes") / WORK_DAYS_PER_MONTH / 60).alias("implied_hours_per_day"),
     ])
 
-    # ── Per-NPI summary (across all months) ──
+    # ── Per-NPI summary (across all months) — collect here ──
+    print("Running aggregation (this may take a few minutes on large datasets)...")
+    try:
+        monthly = monthly.collect(engine="streaming")
+    except Exception:
+        monthly = monthly.collect(streaming=True)
+
     summary = monthly.group_by("BILLING_PROVIDER_NPI_NUM").agg([
         pl.col("capacity_ratio").max().alias("peak_capacity_ratio"),
         pl.col("capacity_ratio").mean().alias("avg_capacity_ratio"),
