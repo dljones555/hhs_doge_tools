@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from simulate_capacity import (
     estimate_minutes,
     run_capacity_analysis,
+    apply_entity_type_enrichment,
     MAX_MINUTES_PER_MONTH,
     HCPCS_MINUTES,
 )
@@ -269,6 +270,73 @@ class TestSuspicionScore:
         assert row["flag_cookie_cutter"] is False
         assert row["flag_family_care"] is False
         assert row["flag_tpa_pattern"] is False
+
+
+# ── Entity type enrichment tests ──
+
+class TestEntityTypeEnrichment:
+    def _make_impossible_summary(self, npi):
+        """Create a summary with an impossible-hours provider."""
+        rows = make_rows(
+            npi=npi, codes_claims=[("99215", 1000, 500, 50000.0)],
+        )
+        return run_capacity_analysis(make_lf(rows))
+
+    def test_individual_keeps_impossible_flag(self):
+        """Type 1 (individual) NPI keeps flag_impossible_hours with full weight."""
+        summary = self._make_impossible_summary(80)
+        enriched = apply_entity_type_enrichment(summary, {"80": "1"})
+        row = get_npi_row(enriched, 80)
+        assert row["entity_type"] == "1"
+        assert row["flag_impossible_hours"] is True
+        assert row["flag_org_impossible"] is False
+
+    def test_org_gets_reduced_flag(self):
+        """Type 2 (org) NPI gets flag_org_impossible instead, with lower weight."""
+        summary = self._make_impossible_summary(81)
+        enriched = apply_entity_type_enrichment(summary, {"81": "2"})
+        row = get_npi_row(enriched, 81)
+        assert row["entity_type"] == "2"
+        assert row["flag_impossible_hours"] is False
+        assert row["flag_org_impossible"] is True
+
+    def test_org_scores_lower_than_individual(self):
+        """Same billing pattern: org NPI should score lower than individual."""
+        rows = (
+            make_rows(npi=82, codes_claims=[("99215", 1000, 500, 50000.0)])
+            + make_rows(npi=83, codes_claims=[("99215", 1000, 500, 50000.0)])
+        )
+        summary = run_capacity_analysis(make_lf(rows))
+        enriched = apply_entity_type_enrichment(summary, {"82": "1", "83": "2"})
+        ind_row = get_npi_row(enriched, 82)
+        org_row = get_npi_row(enriched, 83)
+        assert ind_row["suspicion_score"] > org_row["suspicion_score"]
+
+    def test_unknown_type_treated_as_individual(self):
+        """Unknown entity type gets conservative individual treatment."""
+        summary = self._make_impossible_summary(84)
+        enriched = apply_entity_type_enrichment(summary, {"84": "unknown"})
+        row = get_npi_row(enriched, 84)
+        assert row["entity_type"] == "unknown"
+        assert row["flag_impossible_hours"] is True
+        assert row["flag_org_impossible"] is False
+
+    def test_missing_npi_in_map_defaults_unknown(self):
+        """NPI not in the entity_type_map defaults to unknown (individual weight)."""
+        summary = self._make_impossible_summary(85)
+        enriched = apply_entity_type_enrichment(summary, {})  # empty map
+        row = get_npi_row(enriched, 85)
+        assert row["entity_type"] == "unknown"
+        assert row["flag_impossible_hours"] is True
+
+    def test_non_impossible_unaffected(self):
+        """Provider below impossible threshold is unaffected by enrichment."""
+        rows = make_rows(npi=86, codes_claims=[("99213", 20, 18, 2000.0)])
+        summary = run_capacity_analysis(make_lf(rows))
+        enriched = apply_entity_type_enrichment(summary, {"86": "2"})
+        row = get_npi_row(enriched, 86)
+        assert row["flag_impossible_hours"] is False
+        assert row["flag_org_impossible"] is False
 
 
 # ── Edge cases ──

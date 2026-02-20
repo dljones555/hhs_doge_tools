@@ -1,0 +1,213 @@
+Costa Mesa Recovery Services Probe — 2026-02-19
+=================================================
+
+OVERVIEW
+--------
+Investigated 7 NPIs flagged by the RSL capacity simulation detector on
+Costa Mesa recovery service codes (T1015, H0032, H2019). Applied new
+entity type enrichment to distinguish individual vs organization NPIs
+and adjust scoring accordingly.
+
+Data source: data/slices/costa-mesa-recovery.parquet
+Detector:    scripts/run_real.py with NPPES entity type enrichment
+Profiles:    scripts/profile_npi.py with NPPES header
+
+ENTITY TYPE ENRICHMENT RESULTS
+------------------------------
+The new enrichment correctly split the IMPOSSIBLE flag:
+  - 4 individuals kept IMPOSSIBLE (weight 40)
+  - 2 orgs got ORG-IMP (weight 15, reduced — may have multiple staff)
+  - Behavior Functions (org) dropped from rank ~5 to rank 17
+  - Aragon's billing org (Behavior & Dev Center) is billing-only, not flagged as worker
+
+SHORT SUMMARY
+-------------
+#   NPI            Name                          Type  Verdict     One-liner
+1   1629272588     Sabrina Cooley                Ind   HIGH        Family med billing 19.7 hrs/day T1015 peer support, 885 patients/mo, $4M
+2   1427547694     Amber Aragon                  Ind   HIGH        Behavior analyst, 28.7 hrs/day, 2x capacity sustained for years, $7.1M
+2b  1417465030     Behavior & Dev Center, LLC    Org   LINKED      Aragon's billing entity — sole servicing NPI is Aragon. Shell org.
+3   1811217532     Arturo Acosta                 Ind   MODERATE    T1015 only, 9.3 hrs/day peak — plausible. 8 billing orgs over 7 years.
+4   1265794986     Behavior Functions, Inc       Org   HIGH        Org bills itself as servicing 93% of claims. 24.5 hrs/day peak. $8M.
+5   1508308420     Sarah Lopez                   Ind   MODERATE    Family med, T1015, 7.7 hrs/day — plausible. 508 patients/mo. Same billing org as Cooley.
+6   1568894962     William Beacom                Ind   LOW         4.2 hrs/day on recovery codes. Cookie-cutter only. Modest volume.
+
+FULL NARRATIVES
+---------------
+
+#1 — Sabrina Cooley (1629272588) — Individual, Family Medicine, Mission Viejo CA
+    Billing org: Celebrating Life Community Health Center (1841913951)
+
+A family medicine physician billing exclusively T1015 (community-based peer
+support, 15 min) through a single billing org. In her peak month (May 2024),
+she billed 1,736 claims — 434 hours of face-to-face peer support, or 19.7
+hours every workday. She served 885 unique beneficiaries that month. This
+pattern ran for 17 straight months at high volume, totaling $4M. A family
+medicine doctor doing nothing but peer support at this volume is highly
+unusual — peer support is typically delivered by non-clinical staff, not
+physicians.
+
+Profile data:
+  Peak capacity ratio: 1.41 (141% of max human capacity)
+  Avg capacity ratio:  0.77
+  Peak hours/day:      19.7
+  Active months:       17
+  Total paid:          $4,042,965
+  HCPCS codes:         T1015 only
+  Billing NPIs:        1 (Celebrating Life CHC)
+  Flags:               IMPOSSIBLE, COOKIE
+
+
+#2 — Amber Aragon (1427547694) — Individual, Behavior Analyst, Costa Mesa CA
+    Billing org: Behavior and Development Center, LLC (1417465030)
+
+Behavior analyst billing H2019 (therapeutic behavioral services) and H0032
+(mental health service plan development). Both a servicing provider and billing
+entity. Peak month (Oct 2023): 2,524 claims = 28.7 hours/day, sustained above
+24 hrs/day for 10+ months. $7.1M total paid. Her billing org, Behavior and
+Development Center in Marina del Rey, has exactly one servicing NPI: Aragon
+herself. The org is effectively a one-person shop wearing two hats.
+
+Profile data:
+  Peak capacity ratio: 2.05 (205% of max human capacity)
+  Avg capacity ratio:  1.15
+  Peak hours/day:      28.7
+  Active months:       44
+  Total paid:          $7,116,167
+  HCPCS codes:         H2019, H0032
+  Billing NPIs:        2 (self + Behavior & Dev Center)
+  Flags:               IMPOSSIBLE, COOKIE
+
+
+#2b — Behavior and Development Center, LLC (1417465030) — Organization, Marina del Rey CA
+
+Aragon's billing entity. Org Type 2 but with only one servicing NPI (Aragon).
+The "may have multiple staff" benefit does not apply. All $3.9M in claims
+flow through Aragon as the sole worker. This entity is effectively linked
+to Aragon and should be investigated together.
+
+Profile data:
+  Servicing NPIs:      1 (Aragon only)
+  Total claims:        32,753
+  Total paid:          $3,951,978
+  Peak capacity:       2.05 (28.7 hrs/day — all Aragon)
+  Enumeration date:    Not checked separately
+
+
+#3 — Arturo Acosta (1811217532) — Individual, Family Medicine, Costa Mesa CA
+
+Family medicine doc billing only T1015, but at more plausible volumes. Peak
+was 9.3 hrs/day in Feb 2020, averaging only 3.6 hrs/day. What's notable is
+the 8 different billing organizations he's serviced under over 7 years, and
+624 beneficiaries in his peak month. The volume alone isn't impossible, but a
+family medicine physician dedicating 84 straight months exclusively to peer
+support billing across 8 different orgs is an unusual career path.
+
+Profile data:
+  Peak capacity ratio: 0.67
+  Avg capacity ratio:  0.26
+  Peak hours/day:      9.3
+  Active months:       84
+  Total paid:          $4,513,331
+  HCPCS codes:         T1015 only
+  Billing NPIs:        8
+  Flags:               COOKIE (not IMPOSSIBLE on recovery codes alone)
+
+
+#4 — Behavior Functions, Inc (1265794986) — Organization, Community/Behavioral Health, Costa Mesa CA
+
+The most interesting entity type test case. Flagged ORG-IMP with reduced
+weight (score 64 vs ~89 if individual). But the servicing NPI breakdown
+reveals the org NPI itself is the servicing provider for 93% of all claims
+(73,738 of 79,366). The other 4 servicing NPIs combined account for 5,628
+claims, and 3 of them had 1 month or less of activity. In its peak month
+(Apr 2019), the org billed 2,153 claims = 24.5 hrs/day, all under its own
+NPI as servicing provider. This looks like an organization that isn't really
+distributing work — billing the org NPI as if it were a single person.
+
+Profile data:
+  Peak capacity ratio: 1.75 (175% of max human capacity)
+  Avg capacity ratio:  0.87
+  Peak hours/day:      24.5
+  Active months:       69
+  Total paid:          $7,960,229 (as servicing), $8,814,368 (as billing)
+  HCPCS codes:         H2019, H0032
+  Servicing NPIs:      5 (but 93% under org NPI itself)
+  Flags:               ORG-IMP, COOKIE
+
+
+#5 — Sarah Lopez (1508308420) — Individual, Family Medicine, Glendale CA
+    Billing org: Celebrating Life Community Health Center (1841913951)
+
+Family medicine in Glendale, T1015 only, billing under same org as Cooley
+(Celebrating Life CHC). Peak is 7.7 hrs/day — within a long workday. But
+she's serving 508 unique beneficiaries per month with 15-minute peer support
+encounters. That's 24 different patients per workday, every workday. The
+pattern — another family medicine doctor doing nothing but peer support —
+matches Cooley's pattern exactly. Same billing org. $1.4M over 11 months.
+
+Profile data:
+  Peak capacity ratio: 0.55
+  Avg capacity ratio:  0.39
+  Peak hours/day:      7.7
+  Active months:       11
+  Total paid:          $1,377,938
+  HCPCS codes:         T1015 only
+  Billing NPIs:        1 (Celebrating Life CHC — same as Cooley)
+  Flags:               COOKIE (not IMPOSSIBLE on recovery codes)
+
+
+#6 — William Beacom (1568894962) — Individual, Mental Health Counselor, Costa Mesa CA
+
+On recovery codes alone, the least concerning entity. Mental health counselor,
+T1015 only, peak 4.2 hrs/day, 149 patients. Bills under 3 different orgs.
+Volume is entirely plausible for a full-time peer support counselor. His
+IMPOSSIBLE flag on the full Costa Mesa dataset came from non-recovery codes
+stacking on top. On recovery alone, just cookie-cutter.
+
+Profile data:
+  Peak capacity ratio: 0.30
+  Avg capacity ratio:  0.12
+  Peak hours/day:      4.2
+  Active months:       84
+  Total paid:          $1,134,468
+  HCPCS codes:         T1015 only
+  Billing NPIs:        3
+  Flags:               COOKIE only
+
+
+BILLING ORG OF INTEREST
+-----------------------
+Celebrating Life Community Health Center (1841913951)
+  Type:       Organization — Federally Qualified Health Center (FQHC)
+  Address:    700 W 19th St Ste A&B, Costa Mesa, CA 92627
+  Enumerated: 2022-09-22 (relatively new)
+  Relevance:  Billing org for both Cooley ($4M) and Lopez ($1.4M)
+  Note:       FQHC status means enhanced Medicaid reimbursement rates.
+              Both servicing providers are family medicine doctors doing
+              exclusively T1015 peer support — unusual for physicians.
+              Combined $5.4M through this single billing entity.
+
+
+KEY PATTERNS
+------------
+1. Cooley and Lopez share billing org 1841913951 (Celebrating Life CHC)
+   — worth investigating as a unit
+2. Aragon's org (Behavior & Dev Center) is a one-person shell — org-type
+   protection should not apply
+3. Behavior Functions bills its own org NPI as servicing provider 93% of
+   the time — gaming the individual/org distinction
+4. T1015 peer support is the common thread for 4 of 7 entities — family
+   medicine doctors doing exclusively peer support is a systemic pattern
+5. Two behavioral health orgs (Behavior Functions, Behavior & Dev Center)
+   use only H0032 + H2019 with cookie-cutter 2-code billing
+
+
+NEXT STEPS
+----------
+- [ ] Check if Celebrating Life CHC (1841913951) has other servicing NPIs
+      beyond Cooley and Lopez
+- [ ] Cross-reference 700 W 19th St Costa Mesa for co-located providers
+- [ ] Check NPI suspension/exclusion status for all flagged entities
+- [ ] Investigate Acosta's 8 billing orgs — are they connected?
+- [ ] Run Behavior Functions servicing NPIs through NPPES to identify staff
+- [ ] Examine Beacom's non-recovery codes that triggered IMPOSSIBLE on full dataset

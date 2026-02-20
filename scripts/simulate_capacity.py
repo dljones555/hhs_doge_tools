@@ -74,8 +74,11 @@ def estimate_minutes(code: str) -> float:
         return 60  # home/community services default
     if code[0].isdigit():
         # surgical/procedural CPT codes
-        val = int(code[:3]) if code[:3].isdigit() else 0
-        if 10000 <= int(code) <= 69999:
+        try:
+            code_num = int(code)
+        except ValueError:
+            return 15  # codes like 3075F (quality measures)
+        if 10000 <= code_num <= 69999:
             return 30  # surgical range
         return 15  # default
     if code[0].isalpha():
@@ -214,6 +217,51 @@ def run_capacity_analysis(lf: pl.LazyFrame) -> pl.DataFrame:
     return summary.sort("suspicion_score", descending=True)
 
 
+def apply_entity_type_enrichment(
+    summary: pl.DataFrame, entity_type_map: dict[str, str]
+) -> pl.DataFrame:
+    """Enrich summary with entity types and adjust scoring.
+
+    For org NPIs (Type 2), impossible hours is suspicious but not proof
+    (orgs can have multiple staff). Individual NPIs keep full weight.
+    """
+    # Build entity type column from the map
+    npis = summary["WORKER_NPI"].cast(pl.Utf8).to_list()
+    types = [entity_type_map.get(str(npi), "unknown") for npi in npis]
+    summary = summary.with_columns(
+        pl.Series("entity_type", types)
+    )
+
+    # Split impossible hours flag by entity type
+    summary = summary.with_columns([
+        # Individual impossible: keep full weight (type 1 or unknown)
+        (
+            pl.col("flag_impossible_hours")
+            & (pl.col("entity_type") != "2")
+        ).alias("flag_impossible_hours"),
+        # Org impossible: reduced weight
+        (
+            pl.col("flag_impossible_hours")
+            & (pl.col("entity_type") == "2")
+        ).alias("flag_org_impossible"),
+    ])
+
+    # Recompute suspicion score with adjusted weights
+    summary = summary.with_columns(
+        (
+            pl.col("flag_impossible_hours").cast(pl.Float64) * 40
+            + pl.col("flag_org_impossible").cast(pl.Float64) * 15
+            + pl.col("flag_high_capacity").cast(pl.Float64) * 20
+            + pl.col("flag_cookie_cutter").cast(pl.Float64) * 25
+            + pl.col("flag_family_care").cast(pl.Float64) * 20
+            + pl.col("flag_tpa_pattern").cast(pl.Float64) * 15
+            + (pl.col("peak_capacity_ratio").clip(0, 5) * 10)
+        ).alias("suspicion_score")
+    )
+
+    return summary.sort("suspicion_score", descending=True)
+
+
 def print_report(summary: pl.DataFrame, top_n: int = 25):
     """Print a readable report of flagged providers."""
     flagged = summary.filter(pl.col("suspicion_score") > 20)
@@ -222,42 +270,71 @@ def print_report(summary: pl.DataFrame, top_n: int = 25):
     print(f"  CAPACITY SIMULATION REPORT — {len(flagged)} flagged of {len(summary)} providers")
     print("=" * 90)
 
+    has_entity_type = "entity_type" in summary.columns
+    has_org_impossible = "flag_org_impossible" in summary.columns
+
     impossible = summary.filter(pl.col("flag_impossible_hours"))
+    org_impossible = summary.filter(pl.col("flag_org_impossible")) if has_org_impossible else pl.DataFrame()
     high_cap = summary.filter(pl.col("flag_high_capacity") & ~pl.col("flag_impossible_hours"))
+    if has_org_impossible:
+        high_cap = high_cap.filter(~pl.col("flag_org_impossible"))
     cookie = summary.filter(pl.col("flag_cookie_cutter"))
     family = summary.filter(pl.col("flag_family_care"))
     tpa = summary.filter(pl.col("flag_tpa_pattern"))
 
-    print(f"\n  IMPOSSIBLE HOURS (>{MAX_HOURS_PER_DAY}hr/day peak):  {len(impossible)}")
+    print(f"\n  IMPOSSIBLE HOURS — Individual (>{MAX_HOURS_PER_DAY}hr/day): {len(impossible)}")
+    if has_org_impossible:
+        print(f"  IMPOSSIBLE HOURS — Org (reduced weight):    {len(org_impossible)}")
     print(f"  HIGH CAPACITY (>{HIGH_SUSPICION_RATIO*100:.0f}% utilization):    {len(high_cap)}")
     print(f"  COOKIE-CUTTER (<={COOKIE_CUTTER_MAX_CODES} codes, 50+ patients):  {len(cookie)}")
     print(f"  FAMILY CARE PATTERN (<={FAMILY_CARE_MAX_BENES} benes, 12+ months): {len(family)}")
     print(f"  TPA/BILLING SPLIT (4+ servicing NPIs):    {len(tpa)}")
 
-    print(f"\n  TOP {min(top_n, len(flagged))} SUSPECTS:")
-    print("-" * 90)
-    print(f"  {'WORKER NPI':<14} {'Score':>6} {'Peak hrs/day':>13} {'Peak benes':>11} "
-          f"{'Codes':>6} {'Months':>7} {'Total Paid':>12}  Flags")
-    print("-" * 90)
+    print(f"\n  TOP {min(top_n, len(flagged))} ENTITIES TO INVESTIGATE:")
+    print("-" * 95)
+    if has_entity_type:
+        print(f"  {'WORKER NPI':<14} {'Type':<4} {'Score':>6} {'Peak hrs/day':>13} {'Peak benes':>11} "
+              f"{'Codes':>6} {'Months':>7} {'Total Paid':>12}  Flags")
+    else:
+        print(f"  {'WORKER NPI':<14} {'Score':>6} {'Peak hrs/day':>13} {'Peak benes':>11} "
+              f"{'Codes':>6} {'Months':>7} {'Total Paid':>12}  Flags")
+    print("-" * 95)
 
     for row in flagged.head(top_n).iter_rows(named=True):
         flags = []
         if row["flag_impossible_hours"]: flags.append("IMPOSSIBLE")
+        if has_org_impossible and row.get("flag_org_impossible"): flags.append("ORG-IMP")
         if row["flag_cookie_cutter"]: flags.append("COOKIE")
         if row["flag_family_care"]: flags.append("FAMILY")
         if row["flag_tpa_pattern"]: flags.append("TPA")
         if not flags and row["flag_high_capacity"]: flags.append("HIGH-CAP")
 
-        print(f"  {row['WORKER_NPI']:<14} "
-              f"{row['suspicion_score']:>6.1f} "
-              f"{row['peak_hours_per_day']:>13.1f} "
-              f"{row['peak_benes_per_month']:>11} "
-              f"{row['max_distinct_codes']:>6} "
-              f"{row['active_months']:>7} "
-              f"${row['total_paid_all_time']:>11,.0f}  "
-              f"{', '.join(flags)}")
+        type_label = ""
+        if has_entity_type:
+            et = row.get("entity_type", "unknown")
+            type_label = {"1": "Ind", "2": "Org", "unknown": "Unk"}.get(et, "Unk")
 
-    print("-" * 90)
+        if has_entity_type:
+            print(f"  {row['WORKER_NPI']:<14} "
+                  f"{type_label:<4} "
+                  f"{row['suspicion_score']:>6.1f} "
+                  f"{row['peak_hours_per_day']:>13.1f} "
+                  f"{row['peak_benes_per_month']:>11} "
+                  f"{row['max_distinct_codes']:>6} "
+                  f"{row['active_months']:>7} "
+                  f"${row['total_paid_all_time']:>11,.0f}  "
+                  f"{', '.join(flags)}")
+        else:
+            print(f"  {row['WORKER_NPI']:<14} "
+                  f"{row['suspicion_score']:>6.1f} "
+                  f"{row['peak_hours_per_day']:>13.1f} "
+                  f"{row['peak_benes_per_month']:>11} "
+                  f"{row['max_distinct_codes']:>6} "
+                  f"{row['active_months']:>7} "
+                  f"${row['total_paid_all_time']:>11,.0f}  "
+                  f"{', '.join(flags)}")
+
+    print("-" * 95)
 
 
 def main():

@@ -30,6 +30,22 @@ PRESETS: dict[str, list[str]] = {
         "99202", "99203", "99204", "99205",
     ],
     "screening": ["99381", "99385", "99391", "99395", "99397"],
+    "recovery": [
+        # Behavioral health / sober living mill trifecta
+        "T1015",  # Clinic visit/encounter, per 15 min
+        "H2019",  # Therapeutic behavioral services, per 15 min
+        "H0032",  # Mental health service plan development, per 15 min
+    ],
+    "peer-support": [
+        "H0038",  # Self-help/peer services, per 15 min
+        "H2015",  # Comprehensive community support, per 15 min
+        "H2014",  # Skills training & development, per 15 min
+        "H0025",  # Behavioral health prevention education, per session
+        "H0023",  # Behavioral health outreach, per 15 min
+        "T1016",  # Case management, per 15 min
+        "H2017",  # Psychosocial rehab, per 15 min
+        "H2027",  # Psychoeducational services, per 15 min
+    ],
 }
 
 

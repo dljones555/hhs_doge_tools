@@ -40,6 +40,22 @@ async def lookup_many(npis: list[str]) -> list[dict]:
     return results
 
 
+async def get_entity_types(npis: list[str]) -> dict[str, str]:
+    """Look up entity types for a list of NPIs.
+
+    Returns {npi: "1"|"2"|"unknown"} where "1"=individual, "2"=organization.
+    """
+    results = await lookup_many(npis)
+    entity_map = {}
+    for p in results:
+        npi = str(p.get("npi", ""))
+        if "error" in p:
+            entity_map[npi] = "unknown"
+        else:
+            entity_map[npi] = p.get("entity_type", "unknown") or "unknown"
+    return entity_map
+
+
 def format_provider(p: dict) -> str:
     """Format a single provider record for display."""
     if "error" in p:

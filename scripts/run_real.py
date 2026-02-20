@@ -12,12 +12,14 @@ Usage:
 """
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from code_lists import resolve_codes, PRESETS
-from simulate_capacity import run_capacity_analysis, print_report
+from simulate_capacity import run_capacity_analysis, apply_entity_type_enrichment, print_report
+from lookup_npi import get_entity_types
 import polars as pl
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -72,6 +74,28 @@ def main():
 
     # Run detector
     summary = run_capacity_analysis(lf)
+
+    # Enrich with entity types from NPPES
+    try:
+        flagged_npis = (
+            summary.filter(pl.col("suspicion_score") > args.threshold)
+            ["WORKER_NPI"].cast(pl.Utf8).to_list()
+        )
+        if flagged_npis:
+            print(f"\nLooking up entity types for {len(flagged_npis)} flagged NPIs...")
+            entity_map = asyncio.run(get_entity_types(flagged_npis))
+            summary = apply_entity_type_enrichment(summary, entity_map)
+
+            # Print breakdown
+            types = list(entity_map.values())
+            n_ind = types.count("1")
+            n_org = types.count("2")
+            n_unk = len(types) - n_ind - n_org
+            print(f"  Entity types: {n_ind} individual, {n_org} organization, {n_unk} unknown")
+    except Exception as e:
+        print(f"WARNING: NPPES enrichment failed ({e}), proceeding without entity types",
+              file=sys.stderr)
+
     print_report(summary, top_n=args.top)
 
     # Export

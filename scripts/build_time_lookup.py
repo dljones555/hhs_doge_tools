@@ -62,6 +62,19 @@ MANUAL_CODES = {
     "S5125": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'attendant care services, per 15 minutes'"},
     "S5130": {"minutes": 60, "unit": "per hour", "source": "HCPCS desc: 'homemaker service, NOS, per 15 minutes' (x4)"},
     "S5170": {"minutes": 30, "unit": "per meal", "source": "HCPCS desc: 'home delivered meals, per meal'"},
+    # Behavioral health / recovery
+    "T1015": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'clinic visit/encounter, all-inclusive, per 15 minutes'"},
+    "H2019": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'therapeutic behavioral services, per 15 minutes'"},
+    "H0032": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'mental health service plan development by non-physician'"},
+    # Peer support / community behavioral health
+    "H0038": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'self-help/peer services, per 15 minutes'"},
+    "H2015": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'comprehensive community support services, per 15 minutes'"},
+    "H2014": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'skills training and development, per 15 minutes'"},
+    "H0025": {"minutes": 60, "unit": "per session", "source": "HCPCS desc: 'behavioral health prevention education, per session'"},
+    "H0023": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'behavioral health outreach service, per 15 minutes'"},
+    "T1016": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'case management, each 15 minutes'"},
+    "H2017": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'psychosocial rehabilitation services, per 15 minutes'"},
+    "H2027": {"minutes": 15, "unit": "per 15 min", "source": "HCPCS desc: 'psychoeducational services, per 15 minutes'"},
     # Adult day care
     "T2021": {"minutes": 480, "unit": "per diem", "source": "HCPCS desc: 'day habilitation, per diem'"},
     "T2020": {"minutes": 480, "unit": "per diem", "source": "HCPCS desc: 'day habilitation, waiver; per diem'"},

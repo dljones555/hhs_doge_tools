@@ -95,7 +95,8 @@ def _format_capacity_summary(monthly: pl.DataFrame, n_months: int) -> list[str]:
     return lines
 
 
-def profile_npi(npi: str, data_path: Path, times: dict[str, float]) -> str:
+def profile_npi(npi: str, data_path: Path, times: dict[str, float],
+                entity_info: dict | None = None) -> str:
     lf = pl.scan_parquet(data_path)
 
     df_billing = lf.filter(pl.col("BILLING_PROVIDER_NPI_NUM") == npi).collect()
@@ -118,6 +119,22 @@ def profile_npi(npi: str, data_path: Path, times: dict[str, float]) -> str:
     month_max = all_rows["CLAIM_FROM_MONTH"].max()
 
     w(f"=== NPI PROFILE: {npi} ===")
+    if entity_info:
+        et = entity_info.get("entity_type", "unknown")
+        type_label = {"1": "Individual (Type 1)", "2": "Organization (Type 2)"}.get(et, f"Unknown ({et})")
+        name = entity_info.get("org_name") or f"{entity_info.get('first_name', '')} {entity_info.get('last_name', '')}".strip()
+        taxonomy = entity_info.get("taxonomy_desc") or entity_info.get("taxonomy_code", "")
+        location = f"{entity_info.get('city', '')}, {entity_info.get('state', '')}"
+        w(f"Entity type: {type_label}")
+        if name:
+            w(f"Name: {name}")
+        if taxonomy:
+            w(f"Taxonomy: {taxonomy}")
+        if location.strip(", "):
+            w(f"Location: {location}")
+        if et == "2":
+            w("NOTE: Organization NPI — impossible hours flag has reduced weight (may have multiple staff)")
+        w("")
     w(f"Data source: {data_path.name}")
     if is_billing and is_servicing:
         w("Role: BOTH billing entity and servicing provider")
@@ -298,6 +315,8 @@ def main():
     parser.add_argument("npi", help="NPI to profile (billing or servicing)")
     parser.add_argument("--data", type=str, default=None,
                         help="Path to parquet file (default: data/subset_high_value.parquet)")
+    parser.add_argument("--skip-nppes", action="store_true",
+                        help="Skip NPPES lookup for entity type")
     args = parser.parse_args()
 
     data_path = Path(args.data) if args.data else DATA_DIR / "subset_high_value.parquet"
@@ -307,8 +326,21 @@ def main():
         print(f"ERROR: No data file found. Tried subset and full dataset in {DATA_DIR}", file=sys.stderr)
         sys.exit(1)
 
+    # NPPES lookup for entity type header
+    entity_info = None
+    if not args.skip_nppes:
+        try:
+            import asyncio
+            sys.path.insert(0, str(Path(__file__).parent))
+            from lookup_npi import lookup_many
+            results = asyncio.run(lookup_many([args.npi]))
+            if results and "error" not in results[0]:
+                entity_info = results[0]
+        except Exception as e:
+            print(f"WARNING: NPPES lookup failed ({e}), skipping entity info", file=sys.stderr)
+
     times = load_time_lookup()
-    output = profile_npi(args.npi, data_path, times)
+    output = profile_npi(args.npi, data_path, times, entity_info=entity_info)
     print(output)
 
 

@@ -54,8 +54,8 @@ def _parse_provider(result: dict) -> Provider:
         city=addr.get("city", ""),
         state=addr.get("state", ""),
         zip5=addr.get("postal_code", "")[:5] if addr.get("postal_code") else "",
-        taxonomy_code=tax.get("code", ""),
-        taxonomy_desc=tax.get("desc", ""),
+        taxonomy_code=tax.get("code") or "",
+        taxonomy_desc=tax.get("desc") or "",
         enumeration_date=basic.get("enumeration_date", ""),
         entity_type=et,
     )
