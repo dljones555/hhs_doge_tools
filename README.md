@@ -6,9 +6,9 @@ This repo is a proof-of-concept for exploratory analysis rather than a productio
 
 This project contains only code and documentation. No actual dataset files, patient records, or analytical summaries are included in this repository.
 
-The work grew from a very large HHS Medicaid billing dataset that was made public for citizen review. The source dataset is available from the HHS DOGE public release on Hugging Face:
+The work grew from a very large HHS Medicaid billing dataset that was made public for citizen review. The source dataset is available from the HHS DOGE group and the HHS Open Data platform.
 
-https://huggingface.co/datasets/HHS-Official/medicaid-provider-spending
+https://opendata.hhs.gov/
 
 Streaming access to the dataset was unreliable, so the project focuses on slicing the dataset locally using parquet by geography (city, county, ZIP) and then analyzing aggregated provider billing patterns.
 
