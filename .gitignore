@@ -9,6 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
+# Local IDE and test state
+.vscode/
+.pytest_cache/
+
 # Local data cache
 data/
+summaries/
 .claude/settings.local.json
