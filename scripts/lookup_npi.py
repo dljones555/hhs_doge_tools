@@ -5,11 +5,11 @@ Looks up one or more NPIs via the NPPES API and displays provider details.
 Reuses the existing npi_lookup.py async client with caching.
 
 Usage:
-    uv run python scripts/lookup_npi.py 1326242504
-    uv run python scripts/lookup_npi.py 1326242504 1609875186
+    uv run python scripts/lookup_npi.py <NPI>
+    uv run python scripts/lookup_npi.py <NPI1> <NPI2>
     uv run python scripts/lookup_npi.py --file data/npi_list.txt
     uv run python scripts/lookup_npi.py --top-flagged data/suspects_real.csv --limit 20
-    uv run python scripts/lookup_npi.py 1326242504 --json
+    uv run python scripts/lookup_npi.py <NPI> --json
 """
 
 import argparse

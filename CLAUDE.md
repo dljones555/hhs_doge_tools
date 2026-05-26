@@ -29,10 +29,10 @@ data/              — local cache dir (gitignored)
 ## Commands
 ```bash
 # Run the CLI
-uv run city-extract --city "Costa Mesa" --state "CA"
+uv run city-extract --city "Monowi" --state "NE"
 
 # Or via script
-uv run python scripts/run_city_extract.py --city "Costa Mesa" --state "CA"
+uv run python scripts/run_city_extract.py --city "Monowi" --state "NE"
 
 # Install deps
 uv sync

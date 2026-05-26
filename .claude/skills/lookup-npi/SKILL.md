@@ -12,8 +12,8 @@ uv run python scripts/lookup_npi.py $ARGUMENTS
 ```
 
 Supports multiple modes:
-- Single NPI: `1326242504`
-- Multiple NPIs: `1326242504 1609875186`
+- Single NPI: `<NPI>`
+- Multiple NPIs: `<NPI1> <NPI2>`
 - From file: `--file data/npi_list.txt --limit 20`
 - Top flagged: `--top-flagged data/suspects_real.csv --limit 20`
 - JSON output: `--json`

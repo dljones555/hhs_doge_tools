@@ -6,9 +6,9 @@ servicing (worker) NPI, and outputs a structured narrative suitable for
 piping into an LLM for interpretation.
 
 Usage:
-    uv run python scripts/profile_npi.py 1609875186
-    uv run python scripts/profile_npi.py 1609875186 --data data/subset_high_value.parquet
-    uv run python scripts/profile_npi.py 1609875186 | claude -p "Interpret this provider profile"
+    uv run python scripts/profile_npi.py <NPI>
+    uv run python scripts/profile_npi.py <NPI> --data data/subset_high_value.parquet
+    uv run python scripts/profile_npi.py <NPI> | claude -p "Interpret this provider profile"
 """
 
 import argparse
@@ -310,7 +310,7 @@ def profile_npi(npi: str, data_path: Path, times: dict[str, float],
 def main():
     parser = argparse.ArgumentParser(
         description="Profile an NPI from capacity simulation results",
-        epilog="Pipe output to an LLM: uv run python scripts/profile_npi.py 1234567890 | claude -p 'Interpret this'",
+        epilog="Pipe output to an LLM: uv run python scripts/profile_npi.py <NPI> | claude -p 'Interpret this'",
     )
     parser.add_argument("npi", help="NPI to profile (billing or servicing)")
     parser.add_argument("--data", type=str, default=None,

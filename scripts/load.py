@@ -9,7 +9,7 @@ Usage:
 
     df = load_spending()                          # full dataset
     df = load_spending("data/subset.parquet")     # specific file
-    sub = filter_npis(df, ["1234567890"])          # by NPI list
+    sub = filter_npis(df, ["<NPI>"])          # by NPI list
 """
 
 from pathlib import Path

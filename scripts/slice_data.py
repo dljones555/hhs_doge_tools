@@ -9,7 +9,7 @@ Filters are composable: combine --codes, --npi, --npi-file, --date-start/--date-
 Usage:
     uv run python scripts/slice_data.py --codes home-health --name home-health
     uv run python scripts/slice_data.py --codes "99213,99214" --name custom-em
-    uv run python scripts/slice_data.py --npi 1326242504 --name single-npi
+    uv run python scripts/slice_data.py --npi <NPI> --name single-npi
     uv run python scripts/slice_data.py --npi-file suspects.txt --name suspects
     uv run python scripts/slice_data.py --date-start 2023-01-01 --date-end 2023-12-01 --name fy2023
     uv run python scripts/slice_data.py --codes high-value --date-start 2023-01-01 --name hv-2023
