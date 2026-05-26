@@ -2,7 +2,7 @@
 
 A Python toolkit for Medicaid provider spending analysis, fraud scenario simulation, and local parquet slicing.
 This repository is released into the public domain under CC0 1.0.
-This repo is a proof-of-concept for exploratory analysis rather than a production-grade investigation platform. It includes hard-coded HCPCS groups, zip code patterns, and other heuristic filters that are useful for experimentation but not ideal for deployment.
+This repo is a proof-of-concept for exploratory analysis rather than a production-grade investigation platform. It includes prompt generated inline HCPCS groups, zip code patterns, and other heuristic filters that are useful for experimentation but not ideal for deployment.
 
 This project contains only code and documentation. No actual dataset files, patient records, or analytical summaries are included in this repository.
 
